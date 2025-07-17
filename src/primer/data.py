@@ -1,6 +1,4 @@
-from dataclasses import dataclass
 from functools import partial
-from os import cpu_count
 from pathlib import Path
 from typing import Literal
 
@@ -13,7 +11,8 @@ from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data._utils.collate import default_collate
 from torchdata.stateful_dataloader import StatefulDataLoader
 
-from primer.utilities import DictConfig, get_logger
+from primer.config import DataloaderConfig
+from primer.utilities import get_logger
 
 logger = get_logger("data")
 
@@ -325,38 +324,6 @@ class PackedTokenDataset(TorchDataset):
         return out
 
 
-@dataclass
-class DataloaderConfig(DictConfig):
-    batch_size: int | None = None
-    eval_batch_size: int | None = None
-    shuffle_seed: int | None = None
-    intra_doc_causal_mask: bool = False
-
-    # kwargs
-    num_workers: int | None = cpu_count()
-    pin_memory: bool = True
-    drop_last: bool = True
-    persistent_workers: bool = False
-    multiprocessing_context: str | None = None
-    prefetch_factor: int | None = None
-
-    def get_dataloader_kwargs(self) -> dict:
-        # Remove batch_size, eval_batch_size, and shuffle_seed from the dataloader configuration
-        kwargs = {
-            k: v
-            for k, v in self.to_dict().items()
-            if k not in ["batch_size", "eval_batch_size", "shuffle_seed", "intra_doc_causal_mask"]
-        }
-
-        # NOTE: Shuffling is handled by the PackedTokenDataset to ensure that the sequence-level and
-        # document-level shuffling are consistent and reproducible across different runs. This design
-        # decision avoids potential conflicts or redundant operations that could arise if the dataloader
-        # also attempted to shuffle the data. Therefore, the dataloader will not shuffle.
-        kwargs["shuffle"] = False
-
-        return kwargs
-
-
 class DataModule(LightningDataModule):
     """Data module for tokenized and packed documents into fixed-length sequences.
 
@@ -398,7 +365,7 @@ class DataModule(LightningDataModule):
             if self.dataloader_config.shuffle_seed is not None:
                 logger.info(f"Using shuffle seed {self.dataloader_config.shuffle_seed} for training dataset")
                 self.train_ds = self.train_ds.shuffle(seed=self.dataloader_config.shuffle_seed)
-            
+
             logger.info(f"Train dataset loaded: {len(self.train_ds)=}")
             logger.info(f"{self.train_ds=}")
 
@@ -478,7 +445,9 @@ def get_pos_ids(input_ids: torch.Tensor, eos_token_id: int) -> torch.Tensor:
     segment_ids = reset_mask.cumsum(dim=1)
 
     # Create a range for positions
-    position_range = torch.arange(seq_len, device=input_ids.device, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+    position_range = (
+        torch.arange(seq_len, device=input_ids.device, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+    )
 
     # Get first position of each segment
     segment_starts = torch.full((batch_size, segment_ids.max() + 1), seq_len, device=input_ids.device, dtype=torch.long)  # type: ignore

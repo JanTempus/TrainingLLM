@@ -1,5 +1,4 @@
 import importlib.util
-from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -9,21 +8,19 @@ from lightning.pytorch import Callback, LightningModule
 from lightning.pytorch.loggers.tensorboard import TensorBoardLogger as _TensorBoardLogger
 from tbparse import SummaryReader
 from torch import Tensor
-from torch.optim.adamw import AdamW
 from torch.optim.optimizer import Optimizer
 from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignore
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
-from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
+from transformers.optimization import get_scheduler
 
 from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
-from primer.utilities import DictConfig, get_logger
+from primer.config import TYPE_TO_OPTIMIZER_CLASS, OptimCofig
+from primer.utilities import get_logger
 
 logger = get_logger("model")
-
-TYPE_TO_OPTIMIZER_CLASS = {"adamw": AdamW}
 
 
 def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast) -> dict:
@@ -71,31 +68,6 @@ def load_hf_from_pl(checkpoint_path: str | Path) -> PreTrainedModel:
 class RunningStage(StrEnum):
     TRAIN = "train"
     VALIDATION = "validation"
-
-
-@dataclass
-class OptimCofig(DictConfig):
-    # Optimizer config
-    optim_name: str
-    lr: float
-    weight_decay: float = 0.0
-    weight_decay_embedding: bool = False  # If True, apply weight decay to embedding layers
-    set_grad_to_none: bool = True  # If True, set gradients to None instead of zeroing them out
-    optim_kwargs: dict = field(default_factory=dict)
-
-    # Scheduler config
-    scheduler_name: str | None = None
-    num_warmup_steps: int | None = None
-    scheduler_kwargs: dict = field(default_factory=dict)
-
-    # Gradient accumulation config
-    grad_acc_schedule: dict | None = None
-    zloss_factor: float | None = None  # lambda for zloss, if used
-
-    def __post_init__(self) -> None:
-        assert self.optim_name in TYPE_TO_OPTIMIZER_CLASS
-        if self.scheduler_name is not None:
-            assert self.scheduler_name in TYPE_TO_SCHEDULER_FUNCTION
 
 
 class LanguageModel(LightningModule):

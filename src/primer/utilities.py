@@ -1,11 +1,9 @@
 # import json
-import copy
 import logging
 import os
 import time
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -50,24 +48,6 @@ def track_time(desc: str, task_name: str = "task") -> Generator[None, Any, None]
     finally:
         elapsed_time = time.time() - start_time
         print(f"⏱️ task=`{task_name}` completed in {elapsed_time:.2f} seconds")
-
-
-@dataclass
-class DictConfig:
-    """Dataclass which is subscriptable like a dict"""
-
-    def to_dict(self) -> dict[str, Any]:
-        out = copy.deepcopy(self.__dict__)
-        return out
-
-    def __getitem__(self, k: str) -> Any:
-        return self.__dict__[k]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.__dict__)
-
-    def __len__(self) -> int:
-        return len(self.__dict__)
 
 
 def get_logger(
