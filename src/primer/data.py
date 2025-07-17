@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import partial
 from os import cpu_count
 from pathlib import Path
 from typing import Literal
@@ -9,6 +10,7 @@ import torch
 from datasets import Dataset, load_from_disk
 from lightning.pytorch import LightningDataModule
 from torch.utils.data import Dataset as TorchDataset
+from torch.utils.data._utils.collate import default_collate
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from primer.utilities import DictConfig, get_logger
@@ -47,16 +49,43 @@ class OffsetLocator:
         # Clip to avoid going past original array
         return min(final_idx, self.total_len - 1)
 
+    def locate_batch(self, positions: np.ndarray) -> np.ndarray:
+        """
+        Vectorized version of locate to handle multiple positions at once.
+        Args:
+            positions (np.ndarray): Array of positions to locate.
+        Returns:
+            np.ndarray: Array of indices corresponding to the input positions.
+        """
+        # Level 1: Find blocks for all positions
+        block_indices = np.searchsorted(self.block_starts, positions, side="right") - 1
+        block_indices = np.clip(block_indices, 0, self.offsets_2d.shape[0] - 1)
+
+        # Level 2: Search within blocks
+        rows = self.offsets_2d[block_indices]
+        within_indices = np.array(
+            [np.searchsorted(row, pos, side="right") - 1 for row, pos in zip(rows, positions, strict=True)]
+        )
+        final_indices = block_indices * self.block_size + within_indices
+
+        # Clip to avoid going past the original array
+        return np.minimum(final_indices, self.total_len - 1)
+
     @property
     def total_tokens(self) -> int:
         """Return the total number of tokens in the offsets."""
         return int(self.offsets[-1])
 
-    def get(self, idx: int) -> int:
-        """Get the offset at the given index."""
-        if idx < 0 or idx >= len(self.offsets):
-            raise IndexError(f"Index {idx} is out of bounds for offsets with length {len(self.offsets)}.")
-        return int(self.offsets[idx])
+    def get(self, idx: int | np.ndarray) -> int | np.ndarray:
+        """Get the offset(s) at the given index or indices."""
+        if np.isscalar(idx):
+            if idx < 0 or idx >= len(self.offsets):
+                raise IndexError(f"Index {idx} is out of bounds for offsets with length {len(self.offsets)}.")
+            return int(self.offsets[idx])
+
+        if np.any(idx < 0) or np.any(idx >= len(self.offsets)):
+            raise IndexError(f"Some indices are out of bounds for offsets with length {len(self.offsets)}.")
+        return self.offsets[idx]
 
     def __len__(self) -> int:
         """Return the number of offsets."""
@@ -82,7 +111,7 @@ class PackedTokenDataset(TorchDataset):
         self,
         data_path: str | Path,
         seq_len: int,
-        eod_token_id: int = 0,
+        eos_token_id: int = 0,
         shuffle_seed: int | None = None,
         intra_doc_causal_mask: bool = False,
     ) -> None:
@@ -92,7 +121,7 @@ class PackedTokenDataset(TorchDataset):
             seq_len (int): Max context length used by the model. Internally, this value is incremented by 1
                 to account for the end-of-document (EOD) token, resulting in sequences of length `seq_len + 1`.
                 This adjustment ensures proper handling of the EOD token during training.
-            eod_token_id (int): End-of-document token (default: 0).
+            eos_token_id (int): End-of-document token (default: 0).
             shuffle_seed (int | None): Seed for shuffling documents and sequences.
                 If None, no shuffling is performed.
             intra_doc_causal_mask (bool): Whether to apply a causal mask within individual documents.
@@ -100,7 +129,7 @@ class PackedTokenDataset(TorchDataset):
         """
         self.data_path = Path(data_path)
         self.seq_len = seq_len + 1  # Add one because during training you need shift by one to compute loss
-        self.eod_token_id = eod_token_id
+        self.eos_token_id = eos_token_id
         self.shuffle_seed = shuffle_seed
         self.intra_doc_causal_mask = intra_doc_causal_mask
         self.setup()
@@ -108,7 +137,7 @@ class PackedTokenDataset(TorchDataset):
     def setup(self) -> None:
         # Read datasets
         assert self.data_path.exists(), f"Data path {self.data_path} does not exist."
-        self.dataset: Dataset = load_from_disk(str(self.data_path))  # type: ignore
+        self.dataset: Dataset = load_from_disk(str(self.data_path)).with_format("numpy")  # type: ignore
         assert "input_ids" in self.dataset.column_names
 
         # Creating doc_idx to control document shuffling
@@ -149,7 +178,7 @@ class PackedTokenDataset(TorchDataset):
 
     def _format_metadata_path(self, filename: str) -> Path:
         suffix = f"seed{self.shuffle_seed}" if self.shuffle_seed is not None else "noshuffle"
-        suffix += f"_eod{self.eod_token_id}_seq{self.seq_len}.npy"
+        suffix += f"_eod{self.eos_token_id}_seq{self.seq_len}.npy"
         return self.data_path / f"{filename}_{suffix}"
 
     def _save_arange_memmap(self, size: int, path: str | Path) -> None:
@@ -187,35 +216,10 @@ class PackedTokenDataset(TorchDataset):
     def _load_memmap(self, path: str | Path, is_offsets: bool = False) -> np.memmap:
         return np.memmap(path, dtype=self._offsets_dtype if is_offsets else self._idx_dtype, mode="r")
 
-    # def get_sequence(self, start_pos: int, end_pos: int) -> tuple[torch.Tensor, torch.Tensor | None]:
-    #     """Retrieve a sequence with minimal overhead and fast memory operations."""
-    #     current_tokens = torch.empty(end_pos - start_pos, dtype=torch.long)
-    #     att_mask_doc_ids = torch.empty(self.seq_len, dtype=torch.long) if self.intra_doc_causal_mask else None
-
-    #     # Vectorized operations to retrieve tokens
-    #     positions = torch.arange(start_pos, end_pos, dtype=torch.long)
-    #     shuffled_doc_indices = torch.tensor([self.offsets.locate(pos.item()) for pos in positions], dtype=torch.long)
-    #     doc_indices = torch.tensor([int(self.doc_idx[idx]) for idx in shuffled_doc_indices], dtype=torch.long)
-
-    #     for i, doc_idx in enumerate(doc_indices.unique_consecutive()):
-    #         input_ids = torch.tensor(self.dataset[doc_idx.item()]["input_ids"], dtype=torch.long)
-    #         mask = doc_indices == doc_idx
-    #         relative_positions = positions[mask] - self.offsets.get(shuffled_doc_indices[mask][0].item())
-    #         current_tokens[mask] = input_ids[relative_positions]
-
-    #         if att_mask_doc_ids is not None:
-    #             att_mask_doc_ids[mask] = doc_idx
-
-    #     # Add EOD token if necessary
-    #     if current_tokens.size(0) < self.seq_len:
-    #         current_tokens[current_tokens.size(0)] = self.eod_token_id
-
-    #     return current_tokens, att_mask_doc_ids
-
     def get_sequence(self, start_pos: int, end_pos: int) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Retrieve a sequence with minimal overhead and fast memory operations."""
-        current_tokens = torch.empty(end_pos - start_pos, dtype=torch.long)
-        att_mask_doc_ids = torch.empty(self.seq_len, dtype=torch.long) if self.intra_doc_causal_mask else None
+        current_tokens = np.empty(end_pos - start_pos).astype(np.uint32)
+        att_mask_doc_ids = np.empty(self.seq_len).astype(np.uint32) if self.intra_doc_causal_mask else None
         pos = start_pos
         i = 0
         while pos < end_pos:
@@ -237,8 +241,8 @@ class PackedTokenDataset(TorchDataset):
             tokens_to_copy = min(len(input_ids) - doc_start, end_pos - pos)
 
             # Use PyTorch's in-place assignment without slicing
-            current_tokens[i : i + tokens_to_copy] = torch.as_tensor(
-                input_ids[doc_start : doc_start + tokens_to_copy], dtype=torch.long
+            current_tokens[i : i + tokens_to_copy] = np.array(
+                input_ids[doc_start : doc_start + tokens_to_copy], dtype=np.uint32
             )
 
             if att_mask_doc_ids is not None:
@@ -250,11 +254,42 @@ class PackedTokenDataset(TorchDataset):
 
             # Add EOD token if the document ends, and more tokens are needed
             if doc_start + tokens_to_copy == len(input_ids) and pos < end_pos:
-                current_tokens[i] = self.eod_token_id
+                current_tokens[i] = self.eos_token_id
                 i += 1
                 pos += 1
 
         return current_tokens, att_mask_doc_ids
+
+    def get_sequence2(self, start_pos, end_pos):
+        positions = np.arange(start_pos, end_pos, dtype=np.uint32)
+
+        # Vectorized locate for all positions
+        shuffled_doc_indices = self.offsets.locate_batch(positions)
+        doc_indices = self.doc_idx[shuffled_doc_indices]
+
+        # Group positions by document
+        unique_docs, doc_positions = np.unique(doc_indices, return_inverse=True)
+        input_ids = []
+        pos_offsets = []
+
+        for doc_idx in unique_docs:
+            # Retrieve the document's input_ids
+            doc_input_ids = self.dataset[int(doc_idx)]["input_ids"]
+
+            # Get all positions within this document
+            mask = doc_positions == doc_idx
+            doc_pos = positions[mask]
+            doc_offsets = doc_pos - self.offsets.get(shuffled_doc_indices[mask])
+
+            # Collect tokens and offsets
+            input_ids.extend(doc_input_ids[offset] for offset in doc_offsets)
+            pos_offsets.extend(doc_offsets)
+
+        # Convert to tensors
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        pos_offsets = torch.tensor(pos_offsets, dtype=torch.long)
+
+        return input_ids, pos_offsets
 
     def build_intra_doc_causal_mask(self, doc_ids: torch.Tensor) -> torch.Tensor:
         """Intra-document causal attention mask.
@@ -283,7 +318,7 @@ class PackedTokenDataset(TorchDataset):
         start_pos = index * self.seq_len
         end_pos = start_pos + self.seq_len
 
-        tokens, att_mask = self.get_sequence(start_pos, end_pos)
+        tokens, att_mask = self.get_sequence2(start_pos, end_pos)
         out = {"input_ids": tokens}
         if att_mask is not None:
             out["att_mask"] = att_mask  # self.build_intra_doc_causal_mask(att_mask)
@@ -336,36 +371,45 @@ class DataModule(LightningDataModule):
         train_data_path: str | Path | None,
         val_data_path: str | Path | None,
         seq_len: int,
-        eod_token_id: int,
+        eos_token_id: int,
         dataloader_config: DataloaderConfig,
     ) -> None:
         super().__init__()
         self.train_data_path = Path(train_data_path) if train_data_path else train_data_path
         self.val_data_path = Path(val_data_path) if val_data_path else val_data_path
         self.seq_len = seq_len
-        self.eod_token_id = eod_token_id
+        self.eos_token_id = eos_token_id
         self.dataloader_config = dataloader_config
+        self.collate_fn = (
+            partial(collate_fn, eos_token_id=eos_token_id) if dataloader_config.intra_doc_causal_mask else None
+        )
         self.save_hyperparameters()
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"] | None = None) -> None:
         if self.train_data_path:
-            self.train_ds = PackedTokenDataset(
-                data_path=str(self.train_data_path),
-                seq_len=self.seq_len,
-                eod_token_id=self.eod_token_id,
-                shuffle_seed=self.dataloader_config.shuffle_seed,
-                intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
-            )
+            # self.train_ds = PackedTokenDataset(
+            #     data_path=str(self.train_data_path),
+            #     seq_len=self.seq_len,
+            #     eos_token_id=self.eos_token_id,
+            #     shuffle_seed=self.dataloader_config.shuffle_seed,
+            #     intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
+            # )
+            self.train_ds = load_from_disk(str(self.train_data_path)).with_format("torch")  # type: ignore
+            if self.dataloader_config.shuffle_seed is not None:
+                logger.info(f"Using shuffle seed {self.dataloader_config.shuffle_seed} for training dataset")
+                self.train_ds = self.train_ds.shuffle(seed=self.dataloader_config.shuffle_seed)
+            
             logger.info(f"Train dataset loaded: {len(self.train_ds)=}")
             logger.info(f"{self.train_ds=}")
 
         if self.val_data_path:
-            self.val_ds = PackedTokenDataset(
-                data_path=str(self.val_data_path),
-                seq_len=self.seq_len,
-                eod_token_id=self.eod_token_id,
-                intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
-            )
+            # self.val_ds = PackedTokenDataset(
+            #     data_path=str(self.val_data_path),
+            #     seq_len=self.seq_len,
+            #     eos_token_id=self.eos_token_id,
+            #     intra_doc_causal_mask=self.dataloader_config.intra_doc_causal_mask,
+            # )
+            self.val_ds = load_from_disk(str(self.val_data_path)).with_format("torch")
             logger.info(f"Validation dataset loaded: {len(self.val_ds)=}")
             logger.info(f"{self.val_ds=}")
 
@@ -373,6 +417,7 @@ class DataModule(LightningDataModule):
         return StatefulDataLoader(
             self.train_ds,
             batch_size=self.dataloader_config["batch_size"],
+            collate_fn=self.collate_fn,
             **self.dataloader_config.get_dataloader_kwargs(),
         )
 
@@ -380,5 +425,69 @@ class DataModule(LightningDataModule):
         return StatefulDataLoader(
             self.val_ds,
             batch_size=self.dataloader_config["eval_batch_size"],
+            collate_fn=self.collate_fn,
             **self.dataloader_config.get_dataloader_kwargs(),
         )
+
+
+def collate_fn(batch: list[dict[str, np.ndarray]], eos_token_id: int) -> dict[str, torch.Tensor]:
+    """
+    Collate function for PackedTokenDataset.
+
+    Args:
+        batch (list[dict[str, np.ndarray]]): List of samples from the dataset.
+        eos_token_id (int): End-of-sequence token ID used to reset position IDs.
+
+    Returns:
+        dict[str, torch.Tensor]: Collated batch with position IDs added.
+    """
+    # Use default collate to combine the batch into a single dictionary
+    _batch: dict[str, torch.Tensor] = default_collate(batch)  # type: ignore
+
+    # Ensure the batch is a dictionary and contains the required keys
+    assert isinstance(_batch, dict), f"Expected batch to be a dict, but got {type(_batch)}."
+    assert "input_ids" in _batch, "Batch must contain 'input_ids' key."
+
+    # Add position IDs to the batch
+    _batch["position_ids"] = get_pos_ids(_batch["input_ids"], eos_token_id)
+
+    return _batch
+
+
+def get_pos_ids(input_ids: torch.Tensor, eos_token_id: int) -> torch.Tensor:
+    """
+    Generate position ids that reset to 0 after each eos_token_id.
+
+    Args:
+        input_ids (torch.Tensor): shape (B, T)
+        eos_token_id (int): EOS token that resets the position counter
+
+    Returns:
+        torch.Tensor: Position IDs of shape (B, T)
+    """
+    batch_size, seq_len = input_ids.shape
+
+    # Create a mask for EOS tokens
+    is_eos = input_ids == eos_token_id  # shape (B, T)
+
+    # Reset happens AFTER eos → shift EOS mask right by 1
+    reset_mask = torch.zeros_like(is_eos, dtype=torch.bool)
+    reset_mask[:, 1:] = is_eos[:, :-1]
+
+    # Cumulative segment IDs: incremented each time we reset
+    segment_ids = reset_mask.cumsum(dim=1)
+
+    # Create a range for positions
+    position_range = torch.arange(seq_len, device=input_ids.device, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    # Get first position of each segment
+    segment_starts = torch.full((batch_size, segment_ids.max() + 1), seq_len, device=input_ids.device, dtype=torch.long)  # type: ignore
+    segment_starts.scatter_reduce_(1, segment_ids, position_range, reduce="amin")
+
+    # Gather starting position for each token's segment
+    start_pos = torch.gather(segment_starts, 1, segment_ids)
+
+    # Position = current index - start of segment
+    pos_ids = position_range - start_pos
+
+    return pos_ids
