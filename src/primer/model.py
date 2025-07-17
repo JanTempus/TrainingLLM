@@ -26,15 +26,8 @@ logger = get_logger("model")
 TYPE_TO_OPTIMIZER_CLASS = {"adamw": AdamW}
 
 
-def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast, use_flex_attention: bool = False) -> dict:
-    attn_implementation = (
-        "flex_attention"
-        if use_flex_attention
-        else "flash_attention_2"
-        if importlib.util.find_spec("flash_attn")
-        else "sdpa"
-    )
-
+def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast) -> dict:
+    attn_implementation = "flash_attention_2" if importlib.util.find_spec("flash_attn") else "sdpa"
     kwargs = {
         "vocab_size": len(tok),
         "bos_token_id": tok.bos_token_id,  # type: ignore

@@ -31,7 +31,7 @@ def main(cfg: DictConfig) -> None:
 
     # Load configs
     dataloader_config = DataloaderConfig(**conf_to_dict(cfg.data))
-    model_config = get_model_config(cfg.model, tok, use_flex_attention=False)  # NOTE: no flex attention for now
+    model_config = get_model_config(cfg.model, tok)
 
     # Load datamodule
     datamodule = DataModule(
