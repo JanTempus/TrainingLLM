@@ -17,7 +17,8 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from transformers.optimization import get_scheduler
 
 from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
-from primer.config import TYPE_TO_OPTIMIZER_CLASS, OptimCofig
+from primer.config import OptimCofig
+from primer.optim import TYPE_TO_OPTIMIZER_CLASS
 from primer.utilities import get_logger
 
 logger = get_logger("model")

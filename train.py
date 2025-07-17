@@ -4,7 +4,7 @@ import hydra
 import torch
 from lightning import Trainer, seed_everything
 from lightning.fabric.plugins.environments.slurm import SLURMEnvironment
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig as OmegaDictConfig, OmegaConf
 from transformers import AutoTokenizer, PreTrainedTokenizerFast  # type: ignore
 
 from primer.data import DataloaderConfig, DataModule
@@ -19,7 +19,7 @@ logger = get_logger("hydra")
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="train_conf")
-def main(cfg: DictConfig) -> None:
+def main(cfg: OmegaDictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.save(cfg, "./hparams.yaml")
     logger.info(f"\n{OmegaConf.to_yaml(cfg)}\n{SEP_LINE}")
@@ -69,8 +69,9 @@ def main(cfg: DictConfig) -> None:
         )
         ckpt_path = None
 
+    torch.set_float32_matmul_precision("high")
+
     with track_time("Training"):
-        torch.set_float32_matmul_precision("high")
         trainer.fit(model=module, datamodule=datamodule, ckpt_path=ckpt_path)
 
     with track_time("Validating"):

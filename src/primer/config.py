@@ -4,10 +4,7 @@ from dataclasses import dataclass, field
 from os import cpu_count
 from typing import Any
 
-from torch.optim import AdamW
-from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION
-
-TYPE_TO_OPTIMIZER_CLASS = {"adamw": AdamW}
+from primer.optim import TYPE_TO_OPTIMIZER_CLASS, TYPE_TO_SCHEDULER_FUNCTION
 
 
 @dataclass

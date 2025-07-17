@@ -13,7 +13,7 @@ import srsly
 from huggingface_hub import whoami
 from hydra.utils import instantiate
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
-from omegaconf import OmegaConf
+from omegaconf import DictConfig as OmegaDictConfig, OmegaConf
 from rich import print
 from rich.logging import RichHandler
 
@@ -125,11 +125,11 @@ def ld_to_dl(ld: list[dict]) -> dict[str, list]:
     return {k: [dic[k] for dic in ld] for k in ld[0]}
 
 
-def conf_to_dict(x: DictConfig | None) -> dict:
+def conf_to_dict(x: OmegaDictConfig | None) -> dict:
     if x is not None:
         return OmegaConf.to_container(x)  # type: ignore
     return {}
 
 
-def instantiate_from_conf(list_cfg: list[DictConfig]) -> list:
+def instantiate_from_conf(list_cfg: list[OmegaDictConfig]) -> list:
     return [list(instantiate(cfg).values()) if cfg is not None else None for cfg in list_cfg]
