@@ -31,14 +31,14 @@ def main(cfg: DictConfig) -> None:
 
     # Load configs
     dataloader_config = DataloaderConfig(**conf_to_dict(cfg.data))
-    model_config = get_model_config(cfg.model, tok, use_flex_attention=dataloader_config.intra_doc_causal_mask)
+    model_config = get_model_config(cfg.model, tok, use_flex_attention=False)  # NOTE: no flex attention for now
 
     # Load datamodule
     datamodule = DataModule(
         train_data_path=cfg.train_data_path,
         val_data_path=cfg.val_data_path,
         seq_len=model_config["max_position_embeddings"],
-        eod_token_id=tok.eos_token_id,
+        eos_token_id=tok.eos_token_id,
         dataloader_config=dataloader_config,
     )
 
