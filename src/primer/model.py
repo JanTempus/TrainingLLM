@@ -10,6 +10,7 @@ from lightning.pytorch.loggers.tensorboard import TensorBoardLogger as _TensorBo
 from tbparse import SummaryReader
 from torch import Tensor
 from torch.optim.adamw import AdamW
+from torch.optim.optimizer import Optimizer
 from transformers import PreTrainedModel, PreTrainedTokenizerFast  # type: ignore
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
@@ -85,6 +86,8 @@ class OptimCofig(DictConfig):
     optim_name: str
     lr: float
     weight_decay: float = 0.0
+    weight_decay_embedding: bool = False  # If True, apply weight decay to embedding layers
+    set_grad_to_none: bool = True  # If True, set gradients to None instead of zeroing them out
     optim_kwargs: dict = field(default_factory=dict)
 
     # Scheduler config
@@ -120,6 +123,8 @@ class LanguageModel(LightningModule):
         )
 
         if self.use_liger:
+            # Enable scalar outputs capture for Liger kernel
+            torch._dynamo.config.capture_scalar_outputs = True  # type: ignore
             apply_liger_kernel = (
                 apply_liger_kernel_to_llama if self.config.model_type == "llama" else apply_liger_kernel_to_qwen3
             )
@@ -173,7 +178,7 @@ class LanguageModel(LightningModule):
         loss = out.loss
         logs = {"loss": loss.detach()}
         if self.optim_config.zloss_factor is not None:
-            logits = out.logits
+            logits = out.logits  # FIXME: this will not work with liger kernel: https://github.com/linkedin/Liger-Kernel/issues/441#issuecomment-2865062180
             zloss = logits.logsumexp(dim=-1).pow(2).mean()
             loss += self.optim_config.zloss_factor * zloss
             logs["zloss"] = zloss.detach()
@@ -198,17 +203,30 @@ class LanguageModel(LightningModule):
     def validation_step(self, batch: Tensor, batch_idx: int) -> Tensor:
         return self.step(batch, RunningStage.VALIDATION)  # type: ignore
 
-    def configure_optimizers(self) -> dict:
-        # Get params that require grad
-        param_dict = {pn: p for pn, p in self.model.named_parameters() if p.requires_grad}
+    def optimizer_zero_grad(self, epoch: int, batch_idx: int, optimizer: Optimizer) -> None:
+        optimizer.zero_grad(set_to_none=self.optim_config.set_grad_to_none)
 
-        # Create optim_groups taking care to check whether we want the keller optimiser
+    def configure_optimizers(self) -> dict:
         decay_params, nodecay_params = [], []
-        for _, p in param_dict.items():
-            if p.dim() >= 2:
-                decay_params.append(p)
-            else:
-                nodecay_params.append(p)
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            # Skip weight decay for 1D params (e.g., biases)
+            if param.dim() < 2:
+                nodecay_params.append(param)
+                continue
+
+            # Skip weight decay for embedding layers
+            if not self.optim_config.weight_decay_embedding and name.endswith(".weight"):
+                module_name = name.rsplit(".weight", 1)[0]
+                module = self.model.get_submodule(module_name)
+                if isinstance(module, torch.nn.Embedding):
+                    nodecay_params.append(param)
+                    continue
+
+            decay_params.append(param)
+
         logger.info(f"{len(decay_params)=}, with {sum(p.numel() for p in decay_params):,} params")
         logger.info(f"{len(nodecay_params)=}, with {sum(p.numel() for p in nodecay_params):,} params")
 
