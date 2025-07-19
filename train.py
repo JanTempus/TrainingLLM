@@ -8,7 +8,7 @@ from omegaconf import DictConfig as OmegaDictConfig, OmegaConf
 from transformers import AutoTokenizer, PreTrainedTokenizerFast  # type: ignore
 
 from primer.data import DataloaderConfig, DataModule
-from primer.model import LanguageModel, OptimCofig, TensorBoardLogger, get_model_config
+from primer.trainer import LanguageModel, OptimCofig, TensorBoardLogger, get_model_config
 from primer.utilities import conf_to_dict, get_logger, instantiate_from_conf, track_time
 
 SEP_LINE = f"{'=' * 80}"
