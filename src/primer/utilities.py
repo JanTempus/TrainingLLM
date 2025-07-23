@@ -99,6 +99,11 @@ def add_rich_handler(logger: logging.Logger) -> logging.Logger:
     return logger
 
 
+def make_multiple_of(x: int, multiple_of: int) -> int:
+    """Rounds up `x` to the nearest multiple of `multiple_of`."""
+    return multiple_of * ((x + multiple_of - 1) // multiple_of)
+
+
 def flatten(x: list[list]) -> list:
     return [i for j in x for i in j]
 

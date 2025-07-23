@@ -26,8 +26,10 @@ logger = get_logger("model")
 
 def get_model_config(model_config: dict, tok: PreTrainedTokenizerFast) -> dict:
     attn_implementation = "flash_attention_2" if importlib.util.find_spec("flash_attn") else "sdpa"
+    vocab_size, multiple_of = len(tok), 128
+    vocab_size = multiple_of * ((vocab_size + multiple_of - 1) // multiple_of)
     kwargs = {
-        "vocab_size": len(tok),
+        "vocab_size": vocab_size,
         "bos_token_id": tok.bos_token_id,  # type: ignore
         "eos_token_id": tok.eos_token_id,  # type: ignore
         "pad_token_id": tok.pad_token_id,  # type: ignore
