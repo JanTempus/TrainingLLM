@@ -2,13 +2,12 @@ import copy
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from os import cpu_count
-from typing import Any, Literal, get_args
+from typing import Any, Literal
+
+import torch
 
 from primer.optim import TYPE_TO_OPTIMIZER_CLASS, TYPE_TO_SCHEDULER_FUNCTION
 from primer.utilities import get_logger
-
-ActFnType = Literal["relu", "gelu", "silu", "swish", "mish", "tanh", "sigmoid"]
-NormType = Literal["layernorm", "rmsnorm"]
 
 logger = get_logger("config")
 
@@ -89,6 +88,7 @@ class AttentionConfig(DictConfig):
     n_kv_heads: int | None = 3
     dropout_p: float = 0.0
     bias: bool = False
+    head_dim: int | None = None
 
     def __post_init__(self) -> None:
         # Ensure n_heads is a positive integer
@@ -104,24 +104,47 @@ class AttentionConfig(DictConfig):
         # Ensure dropout_p is a float between 0 and 1
         assert 0 <= self.dropout_p <= 1, "dropout_p must be between 0 and 1"
 
+        # Ensure head_dim is set correctly
+        if self.head_dim is None:
+            # If head_dim is not provided, calculate it based on n_heads
+            assert self.n_heads > 0, "n_heads must be greater than 0 to calculate head_dim"
+
+
+# ==== FeedForward Configs ====
+ACT2FN = {
+    "relu": torch.nn.ReLU,
+    "gelu": torch.nn.GELU,
+    "silu": torch.nn.SiLU,
+    "swish": torch.nn.SiLU,
+    "mish": torch.nn.Mish,
+    "tanh": torch.nn.Tanh,
+    "sigmoid": torch.nn.Sigmoid,
+}
+ActFnType = Literal["relu", "gelu", "silu", "swish", "mish", "tanh", "sigmoid"]
+
 
 @dataclass
 class FeedForwardConfig(DictConfig):
     """Configuration for the feedforward module."""
 
     intermediate_size: int = 3072
-    multiple_of: int = 64
     size_multiplier: float | None = None
     act_fn: ActFnType = "silu"
     bias: bool = True
     gated: bool = True
 
     def __post_init__(self) -> None:
+        self.act_fn = self.act_fn.lower()  # type: ignore
+        assert self.act_fn in ACT2FN, f"{self.act_fn} unsupported. Supported functions: {list(ACT2FN.keys())}"
         assert self.intermediate_size > 0, "intermediate_size must be a positive integer"
-        assert self.multiple_of > 0, "multiple_of must be a positive integer"
         if self.size_multiplier is not None:
             assert self.size_multiplier > 0, "size_multiplier must be a positive float"
-        assert self.act_fn in get_args(ActFnType), f"Unsupported activation function: {self.act_fn}"
+
+
+# ==== Normalisation Configs ====
+NORM2CLASS = {"layernorm": torch.nn.LayerNorm, "rmsnorm": torch.nn.RMSNorm}
+
+NormType = Literal["layernorm", "rmsnorm"]
 
 
 @dataclass
@@ -134,8 +157,10 @@ class QKNormConfig(DictConfig):
     only_head_dim: bool = True
 
     def __post_init__(self) -> None:
-        assert self.type in get_args(NormType), f"Unsupported normalization type: {self.type}"
+        self.type = self.type.lower()  # type: ignore
+        assert self.type in NORM2CLASS, f"Unsupported normalization type: {self.type}"
         assert self.eps > 0, "norm_eps must be a positive float"
+
 
 @dataclass
 class NormConfig(DictConfig):
@@ -147,12 +172,13 @@ class NormConfig(DictConfig):
     attn_pre: bool = True
     attn_post: bool = False
     ffw_pre: bool = True
-    ffw_post: bool = False    
+    ffw_post: bool = False
     attn_qk: bool = False
     attn_qk_only_head_dim: bool = True
 
     def __post_init__(self) -> None:
-        assert self.type in get_args(NormType), f"Unsupported normalization type: {self.type}"
+        self.type = self.type.lower()  # type: ignore
+        assert self.type in NORM2CLASS, f"Unsupported {self.type}, supported norm types: {list(NORM2CLASS.keys())}"
         assert self.eps > 0, "eps must be a positive float"
 
         if not (self.attn_pre or self.attn_post):
@@ -164,50 +190,54 @@ class NormConfig(DictConfig):
         """Get normalization kwargs for attention QK normalization."""
         if self.attn_qk:
             return QKNormConfig(
-                type=self.type,
-                eps=self.eps,
-                kwargs=self.kwargs,
-                only_head_dim=self.attn_qk_only_head_dim,
+                type=self.type, eps=self.eps, kwargs=self.kwargs, only_head_dim=self.attn_qk_only_head_dim
             )
 
+
 @dataclass
-class NopeConfig:
-    strategy: Literal["all", "first_n", "every_n", "custom", "none"] = "all"
-    n: int | None = None         
-    custom_pattern: list[bool] | None = None
+class RopeConfig:
+    theta: float = 10000.0
+    pattern: str = "all"  # e.g. "all", "none", "3:", ":3", "1,3,5", "1:2:10"
+    _num_layers: int | None = None  # Number of layers, used for validation
 
     def __post_init__(self) -> None:
-        assert self.strategy in ["all", "none", "first_n", "every_n", "skip_every_n", "custom"], f"Unknown NoPE strategy: {self.strategy}"
-        assert not (self.strategy == "custom" and (self.custom_pattern is None or not isinstance(self.custom_pattern, list))), \
-            "custom_pattern must be a list of booleans when strategy is 'custom'"
-        
-        if self.strategy in ["first_n", "every_n", "skip_every_n"]:
-            assert self.n is not None and self.n >= 0, "n must be specified for first_n, every_n, or skip_every_n strategies"
+        assert self.theta > 0, "theta must be a positive float"
 
-    def should_use_rope(self, layer_id) -> bool:
-        """Determine whether this layer should use RoPE based on NoPE configuration."""        
-        if self.strategy == "all":
-            return True
-        elif self.strategy == "none":
-            return False
-        elif self.strategy == "first_n":
-            # Use RoPE only for the first n layers
-            assert self.n is not None  # make type checker happy
-            return layer_id < self.n
-        elif self.strategy == "every_n":
-            # Use RoPE every n layers (0, n, 2n, 3n, ...)
-            assert self.n is not None  # make type checker happy
-            return self.n > 0 and (layer_id % self.n) == 0
-        elif self.strategy == "skip_every_n":
-            # Skip RoPE every n layers (disable at n-1, 2n-1, 3n-1, ...)
-            assert self.n is not None  # make type checker happy
-            return self.n == 0 or (layer_id % self.n) != (self.n - 1)
-        elif self.strategy == "custom":
-            # Use custom boolean pattern (cycles if layer_id exceeds pattern length)
-            if self.custom_pattern:
-                return self.custom_pattern[layer_id % len(self.custom_pattern)]
-            return True
-        raise ValueError(f"Unknown NoPE strategy: {self.strategy}")
+        # Validate the pattern string
+        if self.pattern not in ["all", "none"] and not ("," in self.pattern or ":" in self.pattern):
+            # Check if it's a valid slice or comma-separated indices
+            try:
+                if "," in self.pattern:
+                    _ = [int(x) for x in self.pattern.split(",")]
+                elif ":" in self.pattern:
+                    parts = [int(x) if x else None for x in self.pattern.split(":")]
+                    slice(*parts)
+            except ValueError as e:
+                raise ValueError(f"Invalid RoPE pattern: '{self.pattern}'") from e
+
+    def _parse_pattern(self) -> list[bool]:
+        """Parses the pattern string into a boolean mask of length `num_layers`."""
+        assert self._num_layers
+        if self.pattern == "all":
+            return [True] * self._num_layers
+        elif self.pattern == "none":
+            return [False] * self._num_layers
+        elif "," in self.pattern:
+            indices = {int(x) for x in self.pattern.split(",")}
+            return [i in indices for i in range(self._num_layers)]
+        elif ":" in self.pattern:
+            # Supports full slice syntax like "start:stop:step"
+            parts = [int(x) if x else None for x in self.pattern.split(":")]
+            indices = set(range(*slice(*parts).indices(self._num_layers)))
+            return [i in indices for i in range(self._num_layers)]
+        else:
+            raise ValueError(f"Invalid RoPE pattern: '{self.pattern}'")
+
+    def should_use_rope(self, layer_id: int) -> bool:
+        """Determine whether to use RoPE at the given layer."""
+        assert self._num_layers
+        mask = self._parse_pattern()
+        return mask[layer_id]
 
 
 @dataclass
@@ -217,7 +247,7 @@ class ModelConfig(DictConfig):
     Attributes:
         d_model (int): Dimension of the model.
         n_layers (int): Number of layers in the model.
-        max_position_embeddings (int): Maximum number of position embeddings.
+        max_seq_len (int): Maximum number of position embeddings.
         vocab_size (int): Size of the vocabulary.
         n_heads (int): Number of attention heads.
         n_kv_heads (int | None): Number of key-value heads. If None, it will be set to n_heads.
@@ -226,29 +256,76 @@ class ModelConfig(DictConfig):
     """
 
     d_model: int = 768
-    n_layers: int = 12
-    max_position_embeddings: int = 512
+    n_layers: int = 6
+    max_seq_len: int = 512
     vocab_size: int = 30522
     eos_id: int = 0  # End of sequence token ID
+    tie_embeddings: bool = False
 
+    # Layer configuration
+    norm: NormConfig = field(default_factory=NormConfig)
+    rope: RopeConfig = field(default_factory=RopeConfig)
     attention: AttentionConfig = field(default_factory=AttentionConfig)
     ffw: FeedForwardConfig = field(default_factory=FeedForwardConfig)
     parallel_layers: bool = False
 
-    norm: NormConfig = field(default_factory=NormConfig)
-
+    # Initialisation
     depth_init: bool = False
     init_std: float = 0.02
 
-    nope: NopeConfig = field(default_factory=NopeConfig)
+    # This flag is so important. I fixed a weird bug in the past where
+    # the loss was almost flat because I had 128001 vocab_size. I am now
+    # defining it globally as use it everywhere it's needed.
+    multiple_of: int = 128
 
     def __post_init__(self) -> None:
-        # NOTE: Data type validation will be implemented later using OmegaConf or similar
+        # Convert dicts to dataclasses, they validate themselves
+        if isinstance(self.norm, dict):
+            self.norm = NormConfig(**self.norm)
+        if isinstance(self.rope, dict):
+            self.rope = RopeConfig(**self.rope)
+        if isinstance(self.attention, dict):
+            self.attention = AttentionConfig(**self.attention)
+        if isinstance(self.ffw, dict):
+            self.ffw = FeedForwardConfig(**self.ffw)
+
+        # Validate the model configuration
+        self._validate()
+
+        # Ensure these aremultiple of `multiple_of`
+        for attr_name in ["d_model", "vocab_size", "ffw.intermediate_size", "attention.head_dim"]:
+            self._make_multiple_of(attr_name)
+
+        # Add layer info for RoPE checks
+        self.rope._num_layers = self.n_layers
+
+    def _validate(self) -> None:
+        # NOTE: Data type validation will be ensured by OmegaConf or similar
         # Here we only check for basic constraints
         assert self.d_model > 0, "d_model must be a positive integer"
         assert self.n_layers > 0, "n_layers must be a positive integer"
-        assert self.max_position_embeddings > 0, "max_position_embeddings must be a positive integer"
+        assert self.max_seq_len > 0, "max_seq_len must be a positive integer"
         assert self.vocab_size > 0, "vocab_size must be a positive integer"
 
         # Ensure d_model is divisible by n_heads
-        assert self.d_model % self.attention.n_heads == 0, "d_model must be divisible by n_heads"
+        if not self.attention.head_dim:
+            assert self.d_model % self.attention.n_heads == 0, "d_model must be divisible by n_heads"
+
+    def _make_multiple_of(self, attr_name: str) -> None:
+        """Rounds up an attribute to the nearest multiple of `multiple_of`."""
+
+        # This loop handles nested attributes like "ffw.intermediate_size"
+        obj = self
+        parts = attr_name.split(".")
+        for part in parts[:-1]:
+            obj = getattr(obj, part)
+
+        final_attr = parts[-1]
+        original_value = getattr(obj, final_attr)
+
+        if original_value is None or original_value % self.multiple_of == 0:
+            return
+
+        new_value = self.multiple_of * ((original_value + self.multiple_of - 1) // self.multiple_of)
+        logger.warning(f"`{attr_name}` rounded from {original_value} to {new_value} (multiple of {self.multiple_of})")
+        setattr(obj, final_attr, new_value)
