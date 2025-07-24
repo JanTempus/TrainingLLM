@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from primer.config import ACT2FN, NORM2CLASS, ModelConfig, QKNormConfig
+from primer.config import ACT2FN, NORM2CLASS, ModelConfig
 
 SDPBackendType = SDPBackend
 
@@ -35,10 +35,8 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> Tensor:
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
     return freqs_cis
 
-
 def reshape_for_broadcast(freqs_cis: Tensor, x: Tensor) -> Tensor:
-    """
-    Reshape frequency tensor for broadcasting it with another tensor.
+    """Reshape frequency tensor for broadcasting it with another tensor.
 
     This function reshapes the frequency tensor to have the same shape as the target tensor 'x'
     for the purpose of broadcasting the frequency tensor during element-wise operations.
@@ -61,7 +59,6 @@ def reshape_for_broadcast(freqs_cis: Tensor, x: Tensor) -> Tensor:
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
 
-
 def apply_rotary_emb(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor, Tensor]:
     """
     Apply rotary embeddings to input tensors using the given frequency tensor.
@@ -79,13 +76,12 @@ def apply_rotary_emb(xq: Tensor, xk: Tensor, freqs_cis: Tensor) -> tuple[Tensor,
     Returns:
         tuple[Tensor, Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
     """
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2)) # (bs, seqlen, n_heads, head_dim/2, 2)
+    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2)) # (bs, seqlen, n_kv_heads, head_dim/2, 2)
+    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)  # (seqlen, head_dim/2, 2)
+    xq_out = torch.view_as_real(xq_ * freqs_cis).reshape_as(xq)  # (bs, seqlen, n_heads, head_dim)
+    xk_out = torch.view_as_real(xk_ * freqs_cis).reshape_as(xk)  # (bs, seqlen, n_kv_heads, head_dim)
     return xq_out.type_as(xq), xk_out.type_as(xk)
-
 
 def repeat_kv(x: Tensor, n_rep: int) -> Tensor:
     """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
@@ -93,7 +89,7 @@ def repeat_kv(x: Tensor, n_rep: int) -> Tensor:
         return x
     bs, seqlen, n_kv_heads, head_dim = x.shape
     return (
-        torch.unsqueeze(x, dim=3)
+        torch.unsqueeze(x, dim=3)  # (bs, seqlen, n_kv_heads, 1, head_dim)
         .expand(bs, seqlen, n_kv_heads, n_rep, head_dim)
         .reshape(bs, seqlen, n_kv_heads * n_rep, head_dim)
     )
@@ -143,34 +139,35 @@ class Attention(nn.Module):
         bias: bool,
         head_dim: int | None = None,
         use_rope: bool = True,
-        qk_norm_config: QKNormConfig | dict | None = None,
+        qknorm_kwargs: dict | None = None,
     ) -> None:
         super().__init__()
         self.head_dim = d_model // n_heads if head_dim is None else head_dim
         self.n_rep = n_heads // n_kv_heads
-
-        # Allow for NoPe
-        # NOTE: Using a boolean flag is compile-friendly as it allows the compiler to
-        # optimize away conditional branches when the value is known at compile time.
         self.use_rope = use_rope
+
+        self.use_qknorm = False
+        self.qknorm_use_global = False
+        if qknorm_kwargs is not None:
+            assert isinstance(qknorm_kwargs, dict), "qknorm_kwargs must be a dictionary"
+            fields = ["norm_type", "norm_eps", "use_global"]
+            assert all(field in qknorm_kwargs for field in fields), f"qknorm_kwargs must contain '{fields}'"
+
+            self.use_qknorm = True
+            self.qknorm_use_global = qknorm_kwargs["use_global"]
+            norm_type = qknorm_kwargs["norm_type"]
+            norm_eps = qknorm_kwargs["norm_eps"]
+            norm_kwargs = qknorm_kwargs.get("kwargs", {})
+            qnorm_dim = n_heads * self.head_dim if self.qknorm_use_global else self.head_dim
+            knorm_dim = n_kv_heads * self.head_dim if self.qknorm_use_global else self.head_dim
+            self.qnorm = NORM2CLASS[norm_type](qnorm_dim, eps=norm_eps, **norm_kwargs)
+            self.knorm = NORM2CLASS[norm_type](knorm_dim, eps=norm_eps, **norm_kwargs)
 
         self.wq = nn.Linear(d_model, n_heads * self.head_dim, bias=bias)
         self.wk = nn.Linear(d_model, n_kv_heads * self.head_dim, bias=bias)
         self.wv = nn.Linear(d_model, n_kv_heads * self.head_dim, bias=bias)
         self.wo = nn.Linear(n_heads * self.head_dim, d_model, bias=bias)
         self.sdpa = ScaledDotProductAttention(dropout_p=dropout_p)
-
-        self.use_qk_norm = False
-        self.norm_only_head_dim = False
-        if qk_norm_config is not None:
-            _cfg = qk_norm_config if isinstance(qk_norm_config, QKNormConfig) else QKNormConfig(**qk_norm_config)
-            self.use_qk_norm = True
-            self.norm_only_head_dim = _cfg.only_head_dim
-
-            qnorm_dim = self.head_dim if self.norm_only_head_dim else n_heads * self.head_dim
-            knorm_dim = self.head_dim if self.norm_only_head_dim else n_kv_heads * self.head_dim
-            self.qnorm = NORM2CLASS[_cfg.type](qnorm_dim, eps=_cfg.eps, **_cfg.kwargs)
-            self.knorm = NORM2CLASS[_cfg.type](knorm_dim, eps=_cfg.eps, **_cfg.kwargs)
 
     def forward(self, x: Tensor, freqs_cis: Tensor) -> Tensor:
         bs, seqlen, _ = x.shape
@@ -179,8 +176,8 @@ class Attention(nn.Module):
         xv = self.wv(x)  # (bs, seqlen, n_kv_heads * head_dim)
 
         # ==== QK Normalization if applicable
-        if self.use_qk_norm and not self.norm_only_head_dim:
-            # Normalize over the full concatenated dimension first
+        if self.use_qknorm and self.qknorm_use_global:
+            # (Option 1) Normalize over the full concatenated dimension first
             xq = self.qnorm(xq)  # no shape change
             xk = self.knorm(xk)  # no shape change
 
@@ -190,8 +187,8 @@ class Attention(nn.Module):
         xk = xk.view(bs, seqlen, -1, self.head_dim)  # (bs, seqlen, n_kv_heads, head_dim)
         xv = xv.view(bs, seqlen, -1, self.head_dim)  # (bs, seqlen, n_kv_heads, head_dim)
 
-        if self.use_qk_norm and self.norm_only_head_dim:
-            # Normalize each head independently after reshaping
+        if self.use_qknorm and not self.qknorm_use_global:
+            # (Option 2) Normalise each head independently after reshaping
             xq = self.qnorm(xq)  # no shape change
             xk = self.knorm(xk)  # no shape change
 
@@ -220,6 +217,9 @@ class Attention(nn.Module):
         for linear in (self.wq, self.wk, self.wv):
             nn.init.trunc_normal_(linear.weight, mean=0.0, std=0.02)
         nn.init.trunc_normal_(self.wo.weight, mean=0.0, std=init_std)
+        if self.use_qknorm:
+            self.qnorm.reset_parameters()
+            self.knorm.reset_parameters()
 
 
 # ==========================================================================================
@@ -254,7 +254,7 @@ class FeedForward(nn.Module):
             intermediate_size = int(size_multiplier * intermediate_size)
         self.intermediate_size = intermediate_size
 
-        self.act_fn = ACT2FN[act_fn]
+        self.act_fn = ACT2FN[act_fn]()
         self.wup = nn.Linear(d_model, self.intermediate_size, bias=bias)
         self.wdown = nn.Linear(self.intermediate_size, d_model, bias=bias)
 
@@ -290,19 +290,38 @@ class TransformerBlock(nn.Module):
 
         def create_norm(should_create: bool) -> nn.Module | None:
             if should_create:
-                return NORM2CLASS[config.norm.type](config.d_model, eps=config.norm.eps, **config.norm.kwargs)
+                return NORM2CLASS[config.norm_type](config.d_model, eps=config.norm_eps, **config.norm_kwargs)
 
-        self.attn_norm_pre = create_norm(config.norm.attn_pre)
+        # Attention Block
+        self.attn_prenorm = create_norm(config.attn_prenorm)
         self.attn = Attention(
-            config.d_model,
-            **config.attention.to_dict(),
-            use_rope=config.rope.should_use_rope(layer_id),
-            qk_norm_config=config.norm.get_qk_norm_config(),
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            n_kv_heads=config.n_kv_heads,  # type: ignore -> the type checker is confused, this is dealt with in the config
+            dropout_p=config.dropout_p,
+            bias=config.attn_bias,
+            head_dim=config.head_dim,
+            use_rope=config.should_use_rope(layer_id),
+            qknorm_kwargs={
+                "norm_type": config.norm_type,
+                "norm_eps": config.norm_eps,
+                "use_global": config.qknorm_use_global,
+                "kwargs": config.norm_kwargs,
+            } if config.qknorm else None,
         )
-        self.attn_norm_post = create_norm(config.norm.attn_post)
-        self.ffw_norm_pre = create_norm(config.norm.ffw_pre)
-        self.ffw = FeedForward(config.d_model, **config.ffw.to_dict())
-        self.ffw_norm_post = create_norm(config.norm.ffw_post)
+        self.attn_postnorm = create_norm(config.attn_postnorm)
+        
+        # FeedForward Block
+        self.ffw_prenorm = create_norm(config.ffw_prenorm)
+        self.ffw = FeedForward(
+            d_model=config.d_model,
+            intermediate_size=config.intermediate_size,
+            act_fn=config.act_fn,
+            bias=config.ffw_bias,
+            size_multiplier=config.size_multiplier,
+            gated=config.gated,
+        )
+        self.ffw_postnorm = create_norm(config.ffw_postnorm)
 
         # Compute weight initialization standard deviation
         # 1. Per-layer depth scaling: deeper layers get smaller initialization
@@ -311,19 +330,19 @@ class TransformerBlock(nn.Module):
         self.weight_init_std = config.init_std / (2 * depth_factor) ** 0.5
 
     def _apply_attention(self, x: Tensor, freqs_cis: Tensor | None) -> Tensor:
-        if self.attn_norm_pre is not None:
-            x = self.attn_norm_pre(x)
+        if self.attn_prenorm is not None:
+            x = self.attn_prenorm(x)
         x = self.attn(x, freqs_cis)
-        if self.attn_norm_post is not None:
-            x = self.attn_norm_post(x)
+        if self.attn_postnorm is not None:
+            x = self.attn_postnorm(x)
         return x
 
     def _apply_ffw(self, x: Tensor) -> Tensor:
-        if self.ffw_norm_pre is not None:
-            x = self.ffw_norm_pre(x)
+        if self.ffw_prenorm is not None:
+            x = self.ffw_prenorm(x)
         x = self.ffw(x)
-        if self.ffw_norm_post is not None:
-            x = self.ffw_norm_post(x)
+        if self.ffw_postnorm is not None:
+            x = self.ffw_postnorm(x)
         return x
 
     def forward(self, x: Tensor, freqs_cis: Tensor | None = None) -> Tensor:
@@ -338,8 +357,8 @@ class TransformerBlock(nn.Module):
         return x + self._apply_ffw(x)
 
     def init_weights(self) -> None:
-        for norm in (self.attn_norm_pre, self.attn_norm_post, self.ffw_norm_pre, self.ffw_norm_post):
-            if norm and not isinstance(norm, nn.Identity):
+        for norm in (self.attn_prenorm, self.attn_postnorm, self.ffw_prenorm, self.ffw_postnorm):
+            if norm:
                 norm.reset_parameters()  # type: ignore -> the type checker is confused
         self.attn.init_weights(self.weight_init_std)
         self.ffw.init_weights(self.weight_init_std)
@@ -370,7 +389,7 @@ class Transformer(nn.Module):
         self.layers = nn.ModuleList([TransformerBlock(layer_id, config) for layer_id in range(config.n_layers)])
 
         # ==== Output layer
-        self.norm = NORM2CLASS[config.norm.type](config.d_model, eps=config.norm.eps, **config.norm.kwargs)
+        self.norm = NORM2CLASS[config.norm_type](config.d_model, eps=config.norm_eps, **config.norm_kwargs)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         if config.tie_embeddings:
             self.lm_head.weight = self.tok_embeddings.weight
@@ -410,12 +429,12 @@ class Transformer(nn.Module):
 
     def _precompute_freqs_cis(self) -> Tensor:
         return precompute_freqs_cis(
-            self.config.d_model // self.config.attention.n_heads,
+            self.config.head_dim,  # type: ignore -> the type checker is confused, this is dealt with in the config
             # Need to compute until at least the max token limit for generation
             # TODO: explain in docs/composability.md why we removed the 2x
             # relaxing in our CP enablement PR
-            self.config.max_seq_len,
-            self.config.rope.theta,
+            self.config.max_seqlen,
+            self.config.rope_theta,
         )
 
     def forward(self, input_ids: Tensor) -> Tensor:
