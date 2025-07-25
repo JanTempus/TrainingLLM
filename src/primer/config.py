@@ -13,7 +13,7 @@ logger = get_logger("config")
 
 
 @dataclass
-class DictConfig:
+class PrimerConfig:
     """Dataclass which is subscriptable like a dict"""
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,7 +31,7 @@ class DictConfig:
 
 
 @dataclass
-class OptimCofig(DictConfig):
+class OptimCofig(PrimerConfig):
     # Optimizer config
     optim_name: str
     lr: float
@@ -54,11 +54,12 @@ class OptimCofig(DictConfig):
         if self.scheduler_name is not None:
             assert self.scheduler_name in TYPE_TO_SCHEDULER_FUNCTION
 
+
 # ==================================================================================================
 # Data Configurations
 # ==================================================================================================
 @dataclass
-class DataloaderConfig(DictConfig):
+class DataloaderConfig(PrimerConfig):
     batch_size: int | None = None
     eval_batch_size: int | None = None
     shuffle_seed: int | None = None
@@ -81,6 +82,7 @@ class DataloaderConfig(DictConfig):
         }
         return kwargs
 
+
 # ==================================================================================================
 # Model Configurations
 # ==================================================================================================
@@ -100,18 +102,55 @@ NormType = Literal["layernorm", "rmsnorm"]
 
 
 @dataclass
-class ModelConfig(DictConfig):
+class ModelConfig(PrimerConfig):
     """Configuration for the language model.
 
-    Attributes:
+    This configuration is used to define the architecture and hyperparameters of the model.
+
+    General parameters:
         d_model (int): Dimension of the model.
         n_layers (int): Number of layers in the model.
-        max_seqlen (int): Maximum number of position embeddings.
+        max_seqlen (int): Maximum sequence length the model can handle.
         vocab_size (int): Size of the vocabulary.
+        eos_id (int): End of sequence token ID.
+        tie_embeddings (bool): Whether to tie the input and output embeddings.
+        parallel_layers (bool): Whether to use parallel layers.
+        multiple_of (int): Ensure certain dimensions ("d_model", "vocab_size", "intermediate_size", "head_dim")
+            are a multiple of this value. Especially important for performance and compatibility with certain kernels
+            like Liger. Default is 128, which is a common choice for many transformer models.
+        
+    Attention parameters: 
         n_heads (int): Number of attention heads.
-        n_kv_heads (int | None): Number of key-value heads. If None, it will be set to n_heads.
-        att_bias (bool): Whether to use bias in attention layers.
-        init_std (float | dict): Standard deviation for weight initialization.
+        n_kv_heads (int | None): Number of key-value heads, if None, it defaults to `n_heads`.
+        head_dim (int | None): Dimension of each attention head. If None, it is calculated as `d_model // n_heads`.
+        dropout_p (float): Dropout probability for attention layers.
+        attn_bias (bool): Whether to use bias in attention layers.
+        attn_prenorm (bool): Whether to apply prenormalization in attention layers.
+        attn_postnorm (bool): Whether to apply postnormalization in attention layers.
+        qknorm (bool): Whether to use QK normalization.
+        qknorm_use_global (bool): Whether to use global normalization for QK.
+    
+    FeedForward parameters:
+        intermediate_size (int): Size of the intermediate layer in feedforward networks.
+        size_multiplier (float | None): Multiplier for the intermediate size.
+        act_fn (ActFnType): Activation function type.
+        gated (bool): Whether to use gated activation in feedforward networks.
+        ffw_bias (bool): Whether to use bias in feedforward networks.
+        ffw_prenorm (bool): Whether to apply prenormalization in feedforward networks.
+        ffw_postnorm (bool): Whether to apply postnormalization in feedforward networks.
+    
+    Norms parameters:
+        norm_type (NormType): Type of normalization to use.
+        norm_eps (float): Epsilon value for normalization layers.
+        norm_kwargs (dict): Additional keyword arguments for normalization layers.
+    
+    RoPE parameters:
+        rope_theta (float): Theta value for RoPE (Rotary Position Embedding).
+        rope_pattern (str): Pattern for applying RoPE, e.g., "all", "none", "3:", ":3", "1,3,5", "1:2:10".
+    
+    Initialization parameters:
+        depth_init (bool): Whether to use depth initialization.
+        init_std (float): Standard deviation for weight initialization.
     """
 
     d_model: int = 768
@@ -215,6 +254,8 @@ class ModelConfig(DictConfig):
             except ValueError as e:
                 raise ValueError(f"Invalid RoPE pattern: '{self.rope_pattern}'") from e
             
+        self._rope_mask = self._parse_rope_pattern()
+            
         # ==== General checks ====
         # Ensure these values are multiple of `multiple_of`
         for attr_name in ["d_model", "vocab_size", "intermediate_size", "head_dim"]:
@@ -233,21 +274,26 @@ class ModelConfig(DictConfig):
     def _parse_rope_pattern(self) -> list[bool]:
         """Parses the pattern string into a boolean mask of length `n_layers`."""
         if self.rope_pattern == "all":
-            return [True] * self.n_layers
+            logger.info("Using RoPE for all layers")
+            mask = [True] * self.n_layers
         elif self.rope_pattern == "none":
-            return [False] * self.n_layers
+            logger.info("Not using RoPE for any layer")
+            mask = [False] * self.n_layers
         elif "," in self.rope_pattern:
             indices = {int(x) for x in self.rope_pattern.split(",")}
-            return [i in indices for i in range(self.n_layers)]
+            logger.info(f"Using RoPE for layers: {indices}")
+            mask = [i in indices for i in range(self.n_layers)]
         elif ":" in self.rope_pattern:
             # Supports full slice syntax like "start:stop:step"
             parts = [int(x) if x else None for x in self.rope_pattern.split(":")]
             indices = set(range(*slice(*parts).indices(self.n_layers)))
-            return [i in indices for i in range(self.n_layers)]
+            logger.info(f"Using RoPE for layers: {sorted(indices)}")
+            mask = [i in indices for i in range(self.n_layers)]
         else:
             raise ValueError(f"Invalid RoPE pattern: '{self.rope_pattern}'")
 
+        return mask
+
     def should_use_rope(self, layer_id: int) -> bool:
         """Determine whether to use RoPE at the given layer."""
-        mask = self._parse_rope_pattern()
-        return mask[layer_id]
+        return self._rope_mask[layer_id]
