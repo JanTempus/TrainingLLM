@@ -39,12 +39,12 @@ out_parent_folder: training
 run_folder: run_${now:%Y-%m-%d}T${now:%H-%M-%S}
 
 # Tokenizer
-tok_path: "???"
+tok_path: "/local/home/jtempus/TrainingLLM/tokenizers_lp_uv/lp_32768_finewebedu_data"
 tok_subfolder: null
 
 # Data paths
-train_data_path: "???"
-val_data_path: "???"
+train_data_path: "/local/home/jtempus/TrainingLLM/tokenized_dataset_uv/train"
+val_data_path: "/local/home/jtempus/TrainingLLM/tokenized_dataset_uv/validation"
 
 # Model training
 resume_from_checkpoint: null
