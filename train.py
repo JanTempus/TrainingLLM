@@ -53,7 +53,7 @@ def main(cfg: DictConfig) -> None:
     seed_everything(cfg.seed)
     loggers, callbacks = instantiate_from_conf([cfg.get(i) for i in ("loggers", "callbacks")])
     trainer = Trainer(**conf_to_dict(cfg.trainer), logger=loggers, callbacks=callbacks, plugins=plugins)
-
+    #trainer = Trainer(**conf_to_dict(cfg.trainer), plugins=plugins,enable_checkpointing=False)
     # Instantiate the model on device directly
     optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore
     with trainer.init_module():

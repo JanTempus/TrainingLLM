@@ -20,6 +20,7 @@ from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
 
 from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
 from primer.utilities import DictConfig, get_logger
+import ipdb
 
 logger = get_logger("model")
 
@@ -183,7 +184,7 @@ class LanguageModel(LightningModule):
             loss += self.optim_config.zloss_factor * zloss
             logs["zloss"] = zloss.detach()
             logs["total_loss"] = loss.detach()
-
+            ipdb.set_trace()
         self.log_dict(
             {f"{stage}/{k}": v for k, v in logs.items()},
             on_step=stage == RunningStage.TRAIN,

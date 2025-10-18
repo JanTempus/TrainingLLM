@@ -1,4 +1,4 @@
-name: llama
+name: me57M-tied
 model_type: llama
 hidden_act: silu
 hidden_size: 768

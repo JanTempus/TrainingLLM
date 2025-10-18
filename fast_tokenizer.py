@@ -1,13 +1,13 @@
-from datasets import load_from_disk, DatasetDict, load_dataset
+from datasets import load_from_disk, DatasetDict, load_dataset,Dataset
 from transformers import AutoTokenizer
 import numpy as np
 
 
 # --- Config ---
 dataset_url="pietrolesci/finewebedu-20B"
-dataset_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/finewebedu_data"  # let HF do the caching for you
+#dataset_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/finewebedu_data"  # let HF do the caching for you
 out_dir = "tokenized_dataset_uv"
-tokenizer_path = "/local/home/jtempus/TrainingLLM/tokenizers_lp_uv/lp_32768_finewebedu_data"
+tokenizer_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/tokenizers_lp/lp_32768_finewebedu_data"
 batch_size = 1000
 num_proc = 16            # parallel workers for Dataset.map
 val_frac = 0.1
