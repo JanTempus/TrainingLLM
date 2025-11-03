@@ -9,7 +9,7 @@ defaults:
       - grad_norm
       - speed_monitor
       - model_checkpoint
-  - model: llama
+  - model: Me100M
   - override /hydra/job_logging: colorlog
   - override /hydra/hydra_logging: colorlog
   - _self_
@@ -39,12 +39,12 @@ out_parent_folder: training
 run_folder: run_${now:%Y-%m-%d}T${now:%H-%M-%S}
 
 # Tokenizer
-tok_path: "/local/home/jtempus/TrainingLLM/bpe_32768_finewebedu"
+tok_path: ""
 tok_subfolder: null
 
 # Data paths
-train_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed/train"
-val_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed/validation"
+train_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_lp/train"
+val_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_lp/validation"
 
 # Model training
 resume_from_checkpoint: null
@@ -55,7 +55,7 @@ torch_compile: true
 use_liger: true
 
 data:
-  batch_size: 32
+  batch_size: 64
   eval_batch_size: 64
   shuffle_seed: null  # no shuffling
   drop_last: true

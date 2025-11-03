@@ -10,6 +10,8 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast  # type: ignore
 from primer.data import DataloaderConfig, DataModule
 from primer.model import LanguageModel, OptimCofig, TensorBoardLogger, get_model_config
 from primer.utilities import conf_to_dict, get_logger, instantiate_from_conf, track_time
+from lightning.pytorch.loggers import WandbLogger
+
 
 SEP_LINE = f"{'=' * 80}"
 
@@ -23,6 +25,8 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.save(cfg, "./hparams.yaml")
     logger.info(f"\n{OmegaConf.to_yaml(cfg)}\n{SEP_LINE}")
+
+
 
     # Load tokenizer
     logger.info(f"Loading tokenizer {cfg.tok_path}{'/' + cfg.tok_subfolder if cfg.tok_subfolder else ''}")
@@ -50,9 +54,10 @@ def main(cfg: DictConfig) -> None:
         plugins.append(env)
 
     # Load trainer
+    wandb_logger = WandbLogger(project="Tokenisation Project")
     seed_everything(cfg.seed)
     loggers, callbacks = instantiate_from_conf([cfg.get(i) for i in ("loggers", "callbacks")])
-    trainer = Trainer(**conf_to_dict(cfg.trainer), logger=loggers, callbacks=callbacks, plugins=plugins)
+    trainer = Trainer(**conf_to_dict(cfg.trainer), logger=wandb_logger, callbacks=callbacks, plugins=plugins)
     #trainer = Trainer(**conf_to_dict(cfg.trainer), plugins=plugins,enable_checkpointing=False)
     # Instantiate the model on device directly
     optim_config = OptimCofig(**conf_to_dict(cfg.optim))  # type: ignore

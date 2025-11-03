@@ -4,11 +4,12 @@ import numpy as np
 from tqdm import tqdm
 import os
 disable_caching()
+
 # --- CONFIG ---
 DATASET_PATH = "tokenized_dataset_uv/validation"   # where your tokenized data is stored
-PACKED_PATH = "dataset_packed/validation"            # where you want to save the packed version
+PACKED_PATH = "dataset_packed_lp/validation"            # where you want to save the packed version
 #DATASET_PATH = "tokenized_dataset_uv/train"   # where your tokenized data is stored
-#PACKED_PATH = "dataset_packed/train_3"            # where you want to save the packed version
+#PACKED_PATH = "dataset_packed_lp/train_3"            # where you want to save the packed version
 tokenizer_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/tokenizers_lp/lp_32768_finewebedu_data"
 SEQ_LEN = 2049      
 NUM_PROC = 8                              # sequence length
@@ -53,8 +54,8 @@ if __name__ == "__main__":
 
     
     dataset = load_from_disk(DATASET_PATH)
-    dataset_len= int(len(dataset)/3)
-    dataset=dataset.select(range(2*dataset_len,len(dataset)))
+    #dataset_len= int(len(dataset)/4)
+    #dataset=dataset.select(range(2*dataset_len,3*dataset_len))
 
 
     dataset = dataset.shuffle(seed=42)
