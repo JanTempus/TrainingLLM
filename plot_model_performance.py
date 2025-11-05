@@ -30,7 +30,7 @@ def plot_tokenizer_performance(vocab_sizes_1, performance_1,
 
     plt.figure(figsize=(8, 5))
     plt.plot(vocab_sizes_1, performance_1, "o-", label=label_1, linewidth=2, markersize=6)
-    plt.plot(vocab_sizes_2, performance_2, "s--", label=label_2, linewidth=2, markersize=6)
+    plt.plot(vocab_sizes_2, performance_2, "s-", label=label_2, linewidth=2, markersize=6)
 
     plt.title(f"{metric_name} vs Vocabulary Size", fontsize=14, fontweight="bold")
     plt.xlabel("Vocabulary Size", fontsize=12)
