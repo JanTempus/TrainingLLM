@@ -7,7 +7,7 @@ def plot_tokenizer_performance(vocab_sizes_1, performance_1,
                                vocab_sizes_2, performance_2,
                                label_1="Tokenizer A", label_2="Tokenizer B",
                                metric_name="Bits per Byte",
-                               save_path="tokenizer_comparison.png",
+                               save_path="tokenizer_comparison_fertility.png",
                                show_plot=True):
     """
     Plot and save performance of two tokenizers across vocabulary sizes.
@@ -54,10 +54,11 @@ def plot_tokenizer_performance(vocab_sizes_1, performance_1,
 
 if __name__ == "__main__":
 
-    vocab_sizes    =[8196,32768,131072]
-    lp_performance =[2.7507,3.1569,3.3036]
-    bpe_performance=[2.6759,3.1207,3.3004]
+    vocab_sizes    =[1024,2048,4196,8196,16384,32768,65536,131072]
+    lp_performance =[0.717,0.659,0.639,0.580,0.493,0.420,0.348,0.309]
+    bpe_performance=[0.693,0.664,0.642,0.594,0.513,0.429,0.362,0.315]
+    save_path="tokenizer_comparison_fertility.png"
     plot_tokenizer_performance(vocab_sizes, lp_performance, vocab_sizes, bpe_performance,
                            label_1="LP Tokenizer",
                            label_2="Baseline BPE",
-                           metric_name="Perplexity")
+                           metric_name="Fertility")
