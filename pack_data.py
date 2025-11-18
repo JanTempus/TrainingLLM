@@ -1,32 +1,13 @@
-from datasets import load_from_disk, Dataset, disable_caching
+from datasets import load_from_disk, Dataset, disable_caching,concatenate_datasets
 from transformers import AutoTokenizer
 import numpy as np
 from tqdm import tqdm
 import os
-disable_caching()
 
 # --- CONFIG ---
-DATASET_PATH = "tokenized_dataset_uv/validation"   # where your tokenized data is stored
-PACKED_PATH = "dataset_packed_lp/validation"            # where you want to save the packed version
-#DATASET_PATH = "tokenized_dataset_uv/train"   # where your tokenized data is stored
-#PACKED_PATH = "dataset_packed_lp/train_3"            # where you want to save the packed version
-tokenizer_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/tokenizers_lp/lp_32768_finewebedu_data"
 SEQ_LEN = 2049      
 NUM_PROC = 8                              # sequence length
 batch_size=10000
-
-
-# --- Load tokenizer (to get EOS token id) ---
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-EOS_TOKEN_ID = tokenizer.eos_token_id
-print(f"EOS token id = {EOS_TOKEN_ID}")
-
-if EOS_TOKEN_ID is None:
-    raise ValueError("EOS_Token not defined")
-
-# Assumes each example has {"input_ids": [list of token IDs]}
-# Step 1: Shuffle documents
-
 
 def concat_docs(batch):
     all_tokens = []
@@ -34,9 +15,6 @@ def concat_docs(batch):
         all_tokens.extend(ids + [EOS_TOKEN_ID])
     # import ipdb; ipdb.set_trace()
     return {"input_ids": all_tokens}
-
-# Step 3: Chunk into fixed-size sequences
-
 
 def chunk_docs(batch):
     all_tokens = []
@@ -48,20 +26,11 @@ def chunk_docs(batch):
             chunk = []
     return {"input_ids": all_tokens}
 
-# Example usage
-
-if __name__ == "__main__":
-
-    
-    dataset = load_from_disk(DATASET_PATH)
-    #dataset_len= int(len(dataset)/4)
-    #dataset=dataset.select(range(2*dataset_len,3*dataset_len))
-
+def pack_data(dataset,PACKED_PATH,tokenizer_path):    
 
     dataset = dataset.shuffle(seed=42)
     dataset=dataset.flatten_indices()
-
-    
+    EOS_TOKEN_ID
     concatenated = dataset.map(concat_docs, 
                             batched=True, 
                             batch_size=batch_size,
@@ -79,11 +48,58 @@ if __name__ == "__main__":
                             num_proc=NUM_PROC
                             )
     packed = chunks.shuffle(seed=42)
-    packed.flatten_indices()
     # Step 5: Save packed datasetdatasets-cli cache clear
     packed.save_to_disk(PACKED_PATH,max_shard_size="3GB")
 
     print("Packed dataset saved at:", PACKED_PATH)
-    # import ipdb; ipdb.set_trace()
 
+
+
+def merge_datasets(input_paths, output_path, max_shard_size="3GB"):
+    """
+    Load multiple Hugging Face datasets from disk, concatenate them,
+    and save the merged dataset back to disk in shards.
+
+    Args:
+        input_paths (list[str]): List of dataset directories to load.
+        output_path (str): Path to save the merged dataset.
+        max_shard_size (str): Maximum size per shard, e.g. "3GB".
+    """
+    datasets = [load_from_disk(p) for p in input_paths]
+    merged = concatenate_datasets(datasets)
+    merged.save_to_disk(output_path, max_shard_size=max_shard_size)
+    print(f"✅ Merged {len(input_paths)} datasets and saved to {output_path}")
+
+
+if __name__ == "__main__":
+    TOKENIZED_PATH_val = "tokenized_dataset_uv/validation"   # where your tokenized data is stored
+    PACKED_PATH_val = "dataset_packed_lp/validation"            # where you want to save the packed version
+
+
+    TOKENIZED_PATH_train = "tokenized_dataset_uv/train"            # where you want to save the packed version
+    tokenizer_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/tokenizers_lp/lp_32768_finewebedu_data"
+
+    # --- Load tokenizer (to get EOS token id) ---
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    EOS_TOKEN_ID = tokenizer.eos_token_id
+    print(f"EOS token id = {EOS_TOKEN_ID}")
+
+    if EOS_TOKEN_ID is None:
+        raise ValueError("EOS_Token not defined")
+
+    datasets=[]
+    for i in range(3):
+        PACKED_PATH_train = f"dataset_packed_lp/train_{i}"
+        datasets.append(PACKED_PATH_train)
+        
+        dataset = load_from_disk(TOKENIZED_PATH_train)
+        dataset_len= int(len(dataset)/4)
+        print(i*dataset_len)
+        print((i+1)*dataset_len)
+        dataset=dataset.select(range(i*dataset_len,(i+1)*dataset_len))
+        pack_data(dataset,PACKED_PATH_train,tokenizer_path)
     
+    merge_datasets(datasets,"dataset_packed_lp/train")
+
+    dataset=load_from_disk(TOKENIZED_PATH_val)
+    pack_data(dataset,PACKED_PATH_val,tokenizer_path)

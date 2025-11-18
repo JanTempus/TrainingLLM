@@ -20,7 +20,7 @@ from transformers.optimization import TYPE_TO_SCHEDULER_FUNCTION, get_scheduler
 
 from primer.callbacks.gradient_accumulation import GradientAccumulationScheduler
 from primer.utilities import DictConfig, get_logger
-import ipdb
+
 
 logger = get_logger("model")
 

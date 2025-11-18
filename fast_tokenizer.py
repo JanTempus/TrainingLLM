@@ -12,10 +12,18 @@ batch_size = 1000
 num_proc = 16            # parallel workers for Dataset.map
 val_frac = 0.1
 
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+UNK_TOKEN_ID = tokenizer.unk_token_id
+print(f"UNK token id = {UNK_TOKEN_ID}")
+if UNK_TOKEN_ID is None:
+    raise ValueError("UNK_Token not defined")
+
+
 # --- Tokenization function ---
 # def process(batch: dict) -> dict:
 #     input_ids = tokenizer(batch["text"])
 #     return {"input_ids": input_ids, "len": [len(x) for x in input_ids]}
+
 def process(batch: dict) -> dict:
     tokens = tokenizer(batch["text"])["input_ids"]
     return {"input_ids": tokens,
@@ -24,7 +32,6 @@ def process(batch: dict) -> dict:
 
 # NOTE: (best practice) use this when multiproc functions are called
 if __name__ == "__main__":
-
     # --- Load dataset ---
     dataset = load_dataset(dataset_url)  # let HF do the caching for you
     if isinstance(dataset, DatasetDict):
@@ -42,9 +49,9 @@ if __name__ == "__main__":
     ds_dict["validation"] = ds_dict.pop("test")
 
 
-    # --- Load tokenizer ---
-    # NOTE: use the AutoTokenizer instead of PreTrainedTokeniserFast
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
+    # # --- Load tokenizer ---
+    # # NOTE: use the AutoTokenizer instead of PreTrainedTokeniserFast
+    # tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
 
 
     # --- Tokenize ---

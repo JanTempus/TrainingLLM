@@ -9,7 +9,7 @@ defaults:
       - grad_norm
       - speed_monitor
       - model_checkpoint
-  - model: Me100M
+  - model: Me57M
   - override /hydra/job_logging: colorlog
   - override /hydra/hydra_logging: colorlog
   - _self_
@@ -43,8 +43,8 @@ tok_path: ""
 tok_subfolder: null
 
 # Data paths
-train_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_lp/train"
-val_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_lp/validation"
+train_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_bpe/train"
+val_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_bpe/validation"
 
 # Model training
 resume_from_checkpoint: null
