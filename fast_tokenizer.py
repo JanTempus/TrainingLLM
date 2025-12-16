@@ -5,10 +5,9 @@ import numpy as np
 
 # --- Config ---
 dataset_url="pietrolesci/finewebedu-20B"
-#dataset_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/finewebedu_data"  # let HF do the caching for you
 out_dir = "tokenized_dataset_uv"
-tokenizer_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/tokenizers_lp/lp_32768_finewebedu_data"
-batch_size = 1000
+tokenizer_path = "/local/home/jtempus/tokenisation_lp/rounded_tokenizers_fixed/lp_32768_bias"
+batch_size = 10000
 num_proc = 16            # parallel workers for Dataset.map
 val_frac = 0.1
 
@@ -17,12 +16,6 @@ UNK_TOKEN_ID = tokenizer.unk_token_id
 print(f"UNK token id = {UNK_TOKEN_ID}")
 if UNK_TOKEN_ID is None:
     raise ValueError("UNK_Token not defined")
-
-
-# --- Tokenization function ---
-# def process(batch: dict) -> dict:
-#     input_ids = tokenizer(batch["text"])
-#     return {"input_ids": input_ids, "len": [len(x) for x in input_ids]}
 
 def process(batch: dict) -> dict:
     tokens = tokenizer(batch["text"])["input_ids"]

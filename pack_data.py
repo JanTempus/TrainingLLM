@@ -6,7 +6,7 @@ import os
 
 # --- CONFIG ---
 SEQ_LEN = 2049      
-NUM_PROC = 8                              # sequence length
+NUM_PROC = 16                              # sequence length
 batch_size=10000
 
 def concat_docs(batch):
@@ -72,12 +72,18 @@ def merge_datasets(input_paths, output_path, max_shard_size="3GB"):
 
 
 if __name__ == "__main__":
+
+    base_path="dataset_packed_lp_bias/"
+    tokenizer_path = "/local/home/jtempus/tokenisation_lp/rounded_tokenizers_fixed/lp_32768_bias"
+
     TOKENIZED_PATH_val = "tokenized_dataset_uv/validation"   # where your tokenized data is stored
-    PACKED_PATH_val = "dataset_packed_lp/validation"            # where you want to save the packed version
+    PACKED_PATH_val = base_path+"validation"            # where you want to save the packed version
+
+
 
 
     TOKENIZED_PATH_train = "tokenized_dataset_uv/train"            # where you want to save the packed version
-    tokenizer_path = "/local/home/jtempus/tokenisation_lp/lp_tokenizer/tokenizers_lp/lp_32768_finewebedu_data"
+   
 
     # --- Load tokenizer (to get EOS token id) ---
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
@@ -89,7 +95,7 @@ if __name__ == "__main__":
 
     datasets=[]
     for i in range(3):
-        PACKED_PATH_train = f"dataset_packed_lp/train_{i}"
+        PACKED_PATH_train = base_path+f"train_{i}"
         datasets.append(PACKED_PATH_train)
         
         dataset = load_from_disk(TOKENIZED_PATH_train)
@@ -99,7 +105,7 @@ if __name__ == "__main__":
         dataset=dataset.select(range(i*dataset_len,(i+1)*dataset_len))
         pack_data(dataset,PACKED_PATH_train,tokenizer_path)
     
-    merge_datasets(datasets,"dataset_packed_lp/train")
+    merge_datasets(datasets,base_path+"train")
 
     dataset=load_from_disk(TOKENIZED_PATH_val)
     pack_data(dataset,PACKED_PATH_val,tokenizer_path)
