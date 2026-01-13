@@ -23,6 +23,7 @@
     "torchdata>=0.11.0",
     "transformers[torch]>=4.48.0",
     "liger-kernel>=0.5.10",
+    "lm-eval>=0.4.0",
   ]
   description = "A small library to pre-train language models"
   name = "primer"

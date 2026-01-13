@@ -1,0 +1,67 @@
+# =============================
+# Benchmark Evaluation Config
+# =============================
+defaults:
+  - override hydra/job_logging: colorlog
+  - override hydra/hydra_logging: colorlog
+  - _self_
+
+
+hydra:
+
+  # adds colorlog to logging
+  job_logging:
+    formatters:
+      colorlog:
+        format: '[%(cyan)s%(asctime)s%(reset)s][%(blue)s%(name)s%(reset)s][%(log_color)s%(levelname)s%(reset)s] - %(message)s'
+        log_colors:
+          DEBUG: purple
+          INFO: green
+          WARNING: yellow
+          ERROR: red
+          CRITICAL: bold_red
+
+  # tells hydra to make the run/dir the current working directory
+  job:
+    chdir: true
+
+  # folder structure
+  run:
+    dir: ./outputs/benchmarks/${out_path}
+  sweep:
+    dir: ./outputs/multirun/benchmarks
+    subdir: ${out_path}_${hydra.job.id}
+
+
+# Model paths
+run_path: null
+out_path: ${get_folder_name:${run_path},${repo_id}}/${checkpoint}_${now:%Y-%m-%d}T${now:%H-%M-%S}
+
+
+# Alternative: Load from HuggingFace Hub
+tok_path: null
+repo_id: null
+
+
+# Checkpoint name (without ".ckpt")
+checkpoint: last
+
+
+# Benchmark configuration
+benchmarks:
+  - hellaswag
+  - arc_easy
+  - arc_challenge
+  - winogrande
+  - piqa
+
+
+# Evaluation settings
+batch_size: auto
+num_fewshot: 0
+limit: null  # Set to a number to limit examples per task (useful for testing)
+
+
+# Hardware
+device: cuda
+seed: 42
