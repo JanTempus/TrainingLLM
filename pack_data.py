@@ -73,8 +73,8 @@ def merge_datasets(input_paths, output_path, max_shard_size="3GB"):
 
 if __name__ == "__main__":
 
-    base_path="dataset_packed_lp_bias/"
-    tokenizer_path = "/local/home/jtempus/tokenisation_lp/rounded_tokenizers_fixed/lp_32768_bias"
+    base_path="dataset_packed_bpe_65536/"
+    tokenizer_path = "/local/home/jtempus/tokenisation_lp/bpe_tokenizer/bpe_tokenizers/bpe_65536_finewebedu"
 
     TOKENIZED_PATH_val = "tokenized_dataset_uv/validation"   # where your tokenized data is stored
     PACKED_PATH_val = base_path+"validation"            # where you want to save the packed version

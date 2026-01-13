@@ -6,7 +6,7 @@ import numpy as np
 # --- Config ---
 dataset_url="pietrolesci/finewebedu-20B"
 out_dir = "tokenized_dataset_uv"
-tokenizer_path = "/local/home/jtempus/tokenisation_lp/rounded_tokenizers_fixed/lp_32768_bias"
+tokenizer_path = "/local/home/jtempus/tokenisation_lp/bpe_tokenizer/bpe_tokenizers/bpe_65536_finewebedu"
 batch_size = 10000
 num_proc = 16            # parallel workers for Dataset.map
 val_frac = 0.1

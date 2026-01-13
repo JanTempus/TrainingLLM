@@ -12,10 +12,10 @@ from lightning.fabric import Fabric, seed_everything
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.functional import cross_entropy
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer
+from transformers import PreTrainedModel,AutoTokenizer
+from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
-from src.primer.model import load_hf_from_pl
-from src.primer.utilities import ld_to_dl
 
 SEP_LINE = f"{'=' * 80}"
 OmegaConf.register_new_resolver(
@@ -24,6 +24,35 @@ OmegaConf.register_new_resolver(
 
 # Configure the logger
 logger = logging.getLogger("bpb_eval")
+
+def ld_to_dl(ld: list[dict]) -> dict[str, list]:
+    return {k: [dic[k] for dic in ld] for k in ld[0]}
+
+def load_hf_from_pl(checkpoint_path: str | Path) -> PreTrainedModel:
+    logger.info(f"Reading checkpoint from {checkpoint_path=}")
+    checkpoint = torch.load(
+        str(checkpoint_path),
+        weights_only=False,
+        map_location="cpu",
+        # mmap=True,
+    )
+    state_dict = {
+        k.removeprefix("model.").removeprefix("_orig_mod."): v
+        for k, v in checkpoint["state_dict"].items()
+        if k.startswith("model.")
+    }
+    config = checkpoint["hyper_parameters"].get("config")
+    if isinstance(config, dict):
+        config = Qwen3Config(**config) if config["model_type"] == "qwen3" else LlamaConfig(**config)
+    else:
+        # If config is not a dict, it is already a config object
+        assert isinstance(config, Qwen3Config | LlamaConfig), "Config should be either Qwen3Config or LlamaConfig"
+
+    model = Qwen3ForCausalLM(config) if config.model_type == "qwen3" else LlamaForCausalLM(config)
+
+    model.load_state_dict(state_dict)
+    logger.info(f"Model {config=}")
+    return model
 
 def batch_by_tokens_generator_with_padding(
     sorted_dataset: Dataset, max_tokens_per_batch: int
@@ -133,7 +162,7 @@ def compute_statistics_all_tokens(
     return out
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="eval_conf")
+@hydra.main(version_base=None, config_path="../conf", config_name="bpb_conf")
 def main(cfg: DictConfig) -> None:
     # =============================
     # Step 1. Prepare configuration
@@ -153,6 +182,7 @@ def main(cfg: DictConfig) -> None:
         hparams = srsly.read_yaml(run_path / "hparams.yaml")
         tok_path = Path(hparams["tok_path"])  # type: ignore
 
+
         # Load model
         ckpt_path = run_path / ".checkpoints" / f"{cfg.checkpoint}.ckpt"
         model = load_hf_from_pl(ckpt_path)
@@ -169,12 +199,13 @@ def main(cfg: DictConfig) -> None:
 
     # Load Tokenizer
     logger.info(f"Loading tokenizer from {tok_path}")
+    print(f"tok_path {tok_path}")
     tokenizer = AutoTokenizer.from_pretrained(tok_path)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # Load data
-    data_path = Path(cfg.data_path) / tok_path.name / cfg.data_split
+    data_path = Path(cfg.data_path)
     logger.info(f"Loading data from {data_path=}")
     dataset: Dataset = load_from_disk(data_path)  # type: ignore
     dataset = (

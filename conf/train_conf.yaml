@@ -9,7 +9,7 @@ defaults:
       - grad_norm
       - speed_monitor
       - model_checkpoint
-  - model: Me57M
+  - model: Me100M
   - override /hydra/job_logging: colorlog
   - override /hydra/hydra_logging: colorlog
   - _self_
@@ -43,8 +43,8 @@ tok_path: ""
 tok_subfolder: null
 
 # Data paths
-train_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_bpe/train"
-val_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_bpe/validation"
+train_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_bpe_16384/train"
+val_data_path: "/local/home/jtempus/TrainingLLM/dataset_packed_bpe_16384/validation"
 
 # Model training
 resume_from_checkpoint: null
@@ -68,7 +68,7 @@ data:
 
 optim:
   optim_name: adamw
-  lr: 1e-3 #6e-4
+  lr: 0.001 #6e-4 
   grad_acc_schedule: { 0: 2 }
   zloss_factor: null
   weight_decay: 0.01
@@ -79,8 +79,8 @@ optim:
   scheduler_name: warmup_stable_decay # cosine_with_min_lr
   num_warmup_steps: 2000
   scheduler_kwargs:
-    num_decay_steps: 4000
-    min_lr_ratio: 0.01
+    num_decay_steps: 10000
+    min_lr_ratio: 0.02
 
 trainer:
   accelerator: gpu

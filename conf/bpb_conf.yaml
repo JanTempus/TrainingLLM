@@ -1,0 +1,20 @@
+# eval_conf.yaml
+
+seed: 42
+
+# ===== MODEL (Mode 1) =====
+run_path: /local/home/jtempus/TrainingLLM/outputs/training/run_2025-10-15_LP_32k_57M
+checkpoint: last
+
+# ===== DATA =====
+data_path: /local/home/jtempus/TrainingLLM/tokenized_dataset_uv_val
+data_split: validation
+
+# ===== INFERENCE =====
+max_tokens_per_batch: 262144
+window_size: 512
+step_size: 256
+
+# ===== FABRIC =====
+accelerator: gpu
+precision: bf16-true
